@@ -1,41 +1,23 @@
 """
-app.py — Dashboard BRVM Dividendes
-====================================
-✅ Compatible avec le nouveau scraper.py (webdriver-manager)
-   → Plus besoin de driver_path !
+app.py — BRVM : Analyses des Titres et leur Dividende
+======================================================
+Étape 1 : Top 10 titres ayant payé le maximum de dividende
+Étape 2 : Étude du coût des actions qui paient des dividendes
 
-Installation :
-    pip install streamlit selenium webdriver-manager pandas plotly openpyxl
-
-Lancement :
-    streamlit run app.py
+Lancement : streamlit run app.py
 """
 
 import streamlit as st
 import pandas as pd
 import plotly.express as px
 import threading
+import os
+from datetime import datetime
 from scraper import scraper_page, scraper_toutes_pages
-from scheduler import verifier_nouvelles_annonces
-import schedule
-import time
-
-# ── Lancer le scheduler en arrière-plan ───────────────────────────────────────
-def lancer_scheduler():
-    schedule.every(1).hours.do(verifier_nouvelles_annonces)
-    while True:
-        schedule.run_pending()
-        time.sleep(60)
-
-# Démarrer le thread une seule fois
-if "scheduler_started" not in st.session_state:
-    st.session_state.scheduler_started = True
-    thread = threading.Thread(target=lancer_scheduler, daemon=True)
-    thread.start()
 
 # ── Configuration ──────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Dashboard BRVM – Dividendes",
+    page_title="BRVM — Analyses des Titres et Dividendes",
     page_icon="📈",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -43,31 +25,34 @@ st.set_page_config(
 
 CSV_FILE = "dividendes.csv"
 
-# ── CSS personnalisé ───────────────────────────────────────────────────────────
+# ── CSS ────────────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
     .main-title {
-        font-size: 2.2rem;
-        font-weight: 800;
-        color: #1F4E79;
-        border-bottom: 3px solid #FFD700;
-        padding-bottom: 10px;
-        margin-bottom: 20px;
+        font-size: 2rem; font-weight: 800; color: #1F4E79;
+        border-bottom: 3px solid #FFD700; padding-bottom: 10px; margin-bottom: 5px;
+    }
+    .subtitle { font-size: 1rem; color: #888; margin-bottom: 20px; }
+    .etape-header {
+        font-size: 1.4rem; font-weight: 800; color: white;
+        background: linear-gradient(90deg, #1F4E79, #2E75B6);
+        padding: 12px 20px; border-radius: 8px; margin: 25px 0 15px 0;
+    }
+    .section-header {
+        font-size: 1.1rem; font-weight: 700; color: #1F4E79;
+        padding-left: 10px; border-left: 4px solid #FFD700; margin: 15px 0 10px 0;
     }
     div[data-testid="metric-container"] {
         background: linear-gradient(135deg, #1F4E79, #2E75B6);
-        border-radius: 12px;
-        padding: 16px;
+        border-radius: 10px; padding: 14px;
         box-shadow: 0 4px 12px rgba(0,0,0,0.15);
     }
-    div[data-testid="metric-container"] label {
-        color: #BDD7EE !important;
-        font-size: 0.85rem;
-    }
+    div[data-testid="metric-container"] label { color: #BDD7EE !important; font-size: 0.82rem; }
     div[data-testid="metric-container"] [data-testid="stMetricValue"] {
-        color: #FFD700 !important;
-        font-size: 1.6rem;
-        font-weight: 700;
+        color: #FFD700 !important; font-size: 1.3rem; font-weight: 700;
+    }
+    div[data-testid="metric-container"] [data-testid="stMetricDelta"] {
+        color: #90EE90 !important; font-size: 0.85rem;
     }
     section[data-testid="stSidebar"] {
         background: linear-gradient(180deg, #1F4E79 0%, #2E75B6 100%);
@@ -75,686 +60,393 @@ st.markdown("""
     section[data-testid="stSidebar"] * { color: white !important; }
     div.stButton > button {
         background: linear-gradient(90deg, #1F4E79, #2E75B6);
-        color: white;
-        border: none;
-        border-radius: 8px;
-        padding: 10px 24px;
-        font-weight: 600;
-        font-size: 1rem;
-        width: 100%;
+        color: white; border: none; border-radius: 8px;
+        padding: 10px 24px; font-weight: 600; width: 100%;
         transition: all 0.3s ease;
     }
     div.stButton > button:hover {
         background: linear-gradient(90deg, #FFD700, #FFA500);
-        color: #1F4E79;
-        transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(0,0,0,0.2);
-    }
-    .section-header {
-        font-size: 1.4rem;
-        font-weight: 700;
-        color: #1F4E79;
-        margin: 20px 0 10px 0;
-        padding-left: 10px;
-        border-left: 4px solid #FFD700;
+        color: #1F4E79; transform: translateY(-2px);
     }
 </style>
 """, unsafe_allow_html=True)
 
-# ── En-tête ────────────────────────────────────────────────────────────────────
-st.markdown('<div class="main-title">📈 Dashboard BRVM — Dividendes & Rendement</div>', unsafe_allow_html=True)
+# ── Scheduler ──────────────────────────────────────────────────────────────────
+try:
+    from scheduler import verifier_nouvelles_annonces
+    import schedule, time
 
-# ── Rafraîchissement automatique toutes les 5 minutes ─────────────────────────
-import os
-from datetime import datetime
+    def lancer_scheduler():
+        schedule.every(1).hours.do(verifier_nouvelles_annonces)
+        while True:
+            schedule.run_pending()
+            time.sleep(60)
 
-csv_modif = ""
-if os.path.exists(CSV_FILE):
-    ts = os.path.getmtime(CSV_FILE)
-    csv_modif = datetime.fromtimestamp(ts).strftime("%d/%m/%Y %H:%M:%S")
-    st.caption(f"🔄 Dernière mise à jour des données : **{csv_modif}**")
+    if "scheduler_started" not in st.session_state:
+        st.session_state.scheduler_started = True
+        threading.Thread(target=lancer_scheduler, daemon=True).start()
+except Exception:
+    pass
 
-# Rafraîchir automatiquement toutes les 5 minutes
-st.markdown("""
-<script>
-setTimeout(function() {{ window.location.reload(); }}, 300000);
-</script>
-""", unsafe_allow_html=True)
-
-# ── Sidebar ────────────────────────────────────────────────────────────────────
-with st.sidebar:
-    st.markdown("## 🗂️ Navigation")
-    menu = st.selectbox(
-        "",
-        [
-            "🏠 Accueil",
-            "🔍 Scraper une page",
-            "🕷️ Scraper toutes les pages",
-            "🏆 Top 10 Dividendes",
-            "💹 Top 10 Rendement",
-            "📋 Données complètes",
-        ],
-        label_visibility="collapsed"
-    )
-    st.markdown("---")
-
-    # Options scraping
-    st.markdown("### ⚙️ Options")
-    visible   = False  # Plus de Selenium, pas besoin
-    avec_prix = st.toggle("💰 Récupérer les prix", value=True,
-                          help="Récupérer le prix de chaque action (plus lent)")
-    st.markdown("---")
-    st.markdown("**BRVM** – Bourse Régionale des Valeurs Mobilières")
-    st.caption("© 2025 Dashboard BRVM")
-
-
-# ── Chargement des données ─────────────────────────────────────────────────────
-@st.cache_data(ttl=300)  # Cache de 5 minutes — se rafraîchit automatiquement
+# ── Chargement données ─────────────────────────────────────────────────────────
+@st.cache_data(ttl=300)
 def charger_donnees():
     try:
         df = pd.read_csv(CSV_FILE)
-        if df.empty or df.columns.tolist() == []:
+        if df.empty or len(df.columns) == 0:
             return pd.DataFrame()
         df["Dividende_net"] = pd.to_numeric(df["Dividende_net"], errors="coerce").fillna(0)
         if "Prix_action" in df.columns:
             df["Prix_action"] = pd.to_numeric(df["Prix_action"], errors="coerce").fillna(0)
-            df["Rendement"] = df.apply(
-                lambda r: round(r["Dividende_net"] / r["Prix_action"] * 100, 2)
-                if r["Prix_action"] > 0 else 0.0, axis=1
-            )
+        if "Rendement" in df.columns:
+            df["Rendement"] = pd.to_numeric(df["Rendement"], errors="coerce").fillna(0)
         return df
     except (FileNotFoundError, pd.errors.EmptyDataError):
         return pd.DataFrame()
+
+
+# ── Fonction principale d'affichage des 2 étapes ──────────────────────────────
+def afficher_analyses(df):
+    """Affiche l'Étape 1 et l'Étape 2 à partir d'un DataFrame."""
+
+    if df.empty:
+        st.info("💡 Aucune donnée disponible.")
+        return
+
+    # ── Filtre années ──────────────────────────────────────────────────────────
+    if "Exercice" in df.columns:
+        annees_dispo = ["Toutes"] + sorted([int(x) for x in df["Exercice"].dropna().unique().tolist()], reverse=True)
+        col_f1, col_f2 = st.columns([1, 3])
+        with col_f1:
+            annee_select = st.selectbox("📅 Filtrer par année", annees_dispo)
+        if annee_select != "Toutes":
+            df = df[df["Exercice"] == annee_select]
+
+    st.markdown("---")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    #  ÉTAPE 1 — Top 10 titres ayant payé le maximum de dividende
+    # ══════════════════════════════════════════════════════════════════════════
+    st.markdown('<div class="etape-header">📊 Étape 1 — Top 10 Titres : Maximum de Dividende</div>', unsafe_allow_html=True)
+
+    # Calculs Étape 1
+    top10 = (
+        df.groupby("Emetteur")["Dividende_net"]
+        .sum().sort_values(ascending=False).head(10).reset_index()
+    )
+    top10.columns = ["Emetteur", "Dividende cumulé (FCFA)"]
+
+    best_div_nom    = top10.iloc[0]["Emetteur"] if not top10.empty else "N/A"
+    best_div_val    = top10.iloc[0]["Dividende cumulé (FCFA)"] if not top10.empty else 0
+    moy_div_val     = df["Dividende_net"].mean()
+    moy_div_nom     = df.groupby("Emetteur")["Dividende_net"].mean().idxmax()
+
+    rend_max_val    = df["Rendement"].max() if "Rendement" in df.columns else 0
+    rend_max_nom    = df.loc[df["Rendement"].idxmax(), "Emetteur"] if rend_max_val > 0 else "N/A"
+    rend_moy_val    = df[df["Rendement"]>0]["Rendement"].mean() if rend_max_val > 0 else 0
+    rend_moy_nom    = df[df["Rendement"]>0].groupby("Emetteur")["Rendement"].mean().idxmax() if rend_max_val > 0 else "N/A"
+
+    # KPIs Étape 1 — 4 KPIs
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("📋 Total annonces",     f"{len(df):,}")
+    k2.metric("🏢 Émetteurs",          f"{df['Emetteur'].nunique()}")
+    k3.metric("🏆 Meilleur dividende", f"{best_div_val:,.0f} FCFA",
+              delta=best_div_nom)
+    k4.metric("💹 Meilleur rendement", f"{rend_max_val:.2f}%",
+              delta=rend_max_nom if rend_max_val > 0 else "N/A")
+
+    st.markdown("---")
+
+    # Graphes Étape 1
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.markdown('<div class="section-header">🏆 Top 10 — Dividende cumulé</div>', unsafe_allow_html=True)
+        top10_plot = top10.copy()
+        top10_plot.index += 1
+        fig1 = px.bar(
+            top10_plot, x="Dividende cumulé (FCFA)", y="Emetteur",
+            orientation="h", text="Dividende cumulé (FCFA)",
+            color="Dividende cumulé (FCFA)",
+            color_continuous_scale=["#BDD7EE","#1F4E79"],
+            template="plotly_dark",
+            labels={"Dividende cumulé (FCFA)":"Dividende cumulé (FCFA)","Emetteur":""}
+        )
+        fig1.update_traces(texttemplate="%{text:,.0f}", textposition="outside",
+                           textfont=dict(color="white", size=10))
+        fig1.update_layout(height=400, coloraxis_showscale=False,
+                           yaxis=dict(categoryorder="total ascending"),
+                           plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                           font=dict(color="white"), margin=dict(l=10,r=80,t=10,b=10))
+        st.plotly_chart(fig1, use_container_width=True)
+
+    with col2:
+        st.markdown('<div class="section-header">💹 Top 10 — Meilleur rendement</div>', unsafe_allow_html=True)
+        if "Rendement" in df.columns and df["Rendement"].sum() > 0:
+            top10_rend = (
+                df[df["Rendement"]>0].groupby("Emetteur")["Rendement"]
+                .max().sort_values(ascending=False).head(10).reset_index()
+            )
+            fig2 = px.bar(
+                top10_rend, x="Rendement", y="Emetteur",
+                orientation="h", text="Rendement",
+                color="Rendement",
+                color_continuous_scale=["#D9F0D3","#1A7A36"],
+                template="plotly_dark",
+                labels={"Rendement":"Rendement max (%)","Emetteur":""}
+            )
+            fig2.update_traces(texttemplate="%{text:.2f}%", textposition="outside",
+                               textfont=dict(color="white", size=10))
+            fig2.update_layout(height=400, coloraxis_showscale=False,
+                               yaxis=dict(categoryorder="total ascending"),
+                               plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                               font=dict(color="white"), margin=dict(l=10,r=80,t=10,b=10))
+            st.plotly_chart(fig2, use_container_width=True)
+        else:
+            st.info("Active 'Récupérer les prix' pour voir le rendement.")
+
+    # Tableau Top 10
+    st.markdown('<div class="section-header">📋 Classement Top 10 Dividendes</div>', unsafe_allow_html=True)
+    top10_display = top10.copy()
+    top10_display.index += 1
+    st.dataframe(top10_display, use_container_width=True, height=380)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    #  ÉTAPE 2 — Étude du coût des actions qui paient des dividendes
+    # ══════════════════════════════════════════════════════════════════════════
+    st.markdown('<div class="etape-header">💵 Étape 2 — Étude du Coût des Actions à Dividende</div>', unsafe_allow_html=True)
+
+    df_prix = df[df["Prix_action"] > 0].copy() if "Prix_action" in df.columns else pd.DataFrame()
+
+    if df_prix.empty:
+        st.warning("⚠️ Lance le scraping avec 'Récupérer les prix' activé pour voir cette section.")
+        return
+
+    synthese = (
+        df_prix.groupby("Emetteur")
+        .agg(
+            Prix_action     = ("Prix_action",  "mean"),
+            Dividende_moyen = ("Dividende_net", "mean"),
+            Dividende_max   = ("Dividende_net", "max"),
+            Rendement_moyen = ("Rendement",     "mean"),
+            Rendement_max   = ("Rendement",     "max"),
+            Nb_versements   = ("Dividende_net", "count"),
+        )
+        .reset_index()
+        .sort_values("Prix_action", ascending=False)
+        .reset_index(drop=True)
+    )
+
+    plus_chere_nom  = synthese.iloc[0]["Emetteur"]
+    plus_chere_val  = synthese.iloc[0]["Prix_action"]
+    moins_chere_nom = synthese.iloc[-1]["Emetteur"]
+    moins_chere_val = synthese.iloc[-1]["Prix_action"]
+    prix_moyen_val  = synthese["Prix_action"].mean()
+    leader_rend_nom = synthese.loc[synthese["Rendement_max"].idxmax(), "Emetteur"]
+    leader_rend_val = synthese["Rendement_max"].max()
+
+    # KPIs Étape 2 — 4 KPIs
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("📊 Nb actions analysées",  f"{len(synthese)}")
+    k2.metric("💎 Action la plus chère",  f"{plus_chere_val:,.0f} FCFA",
+              delta=plus_chere_nom)
+    k3.metric("💡 Action la moins chère", f"{moins_chere_val:,.0f} FCFA",
+              delta=moins_chere_nom)
+    k4.metric("💰 Prix moyen par action", f"{prix_moyen_val:,.0f} FCFA")
+
+    st.markdown("---")
+
+    col3, col4 = st.columns(2)
+
+    with col3:
+        st.markdown('<div class="section-header">💎 Prix des actions (FCFA)</div>', unsafe_allow_html=True)
+        fig3 = px.bar(
+            synthese.sort_values("Prix_action", ascending=False),
+            x="Prix_action", y="Emetteur",
+            orientation="h", text="Prix_action",
+            color="Prix_action",
+            color_continuous_scale=["#FFE5CC","#FF6B35"],
+            template="plotly_dark",
+            labels={"Prix_action":"Prix action (FCFA)","Emetteur":""},
+            title="Prix des actions qui paient des dividendes"
+        )
+        fig3.update_traces(texttemplate="%{text:,.0f}", textposition="outside",
+                           textfont=dict(color="white", size=9))
+        fig3.update_layout(height=500, coloraxis_showscale=False,
+                           yaxis=dict(categoryorder="total ascending"),
+                           plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                           font=dict(color="white"), title_font=dict(color="#FFD700"),
+                           margin=dict(l=10,r=80,t=50,b=10))
+        st.plotly_chart(fig3, use_container_width=True)
+
+    with col4:
+        st.markdown('<div class="section-header">📊 Prix action vs Dividende versé</div>', unsafe_allow_html=True)
+        # Graphe barres groupées Prix vs Dividende — plus lisible
+        top15 = synthese.sort_values("Prix_action", ascending=False).head(15)
+        fig4 = px.bar(
+            top15.melt(id_vars="Emetteur",
+                       value_vars=["Prix_action", "Dividende_moyen"],
+                       var_name="Indicateur", value_name="Valeur (FCFA)"),
+            x="Emetteur", y="Valeur (FCFA)",
+            color="Indicateur",
+            barmode="group",
+            text="Valeur (FCFA)",
+            color_discrete_map={
+                "Prix_action"    : "#2E75B6",
+                "Dividende_moyen": "#FFD700"
+            },
+            template="plotly_dark",
+            labels={"Emetteur":"", "Valeur (FCFA)":"Valeur (FCFA)"},
+            title="Prix de l'action vs Dividende moyen versé"
+        )
+        fig4.update_traces(texttemplate="%{text:,.0f}", textposition="outside",
+                           textfont=dict(size=9, color="white"))
+        fig4.update_layout(
+            height=500,
+            xaxis=dict(tickangle=-35),
+            plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+            font=dict(color="white"), title_font=dict(color="#FFD700"),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            margin=dict(t=60, b=80)
+        )
+        st.plotly_chart(fig4, use_container_width=True)
+
+    # Tableau comparatif Étape 2
+    st.markdown('<div class="section-header">📋 Tableau comparatif — Prix | Dividende | Rendement</div>', unsafe_allow_html=True)
+    synthese_aff = synthese.copy().round(2)
+    synthese_aff.columns = [
+        "Émetteur","Prix action (FCFA)","Dividende moyen (FCFA)",
+        "Dividende max (FCFA)","Rendement moyen (%)","Rendement max (%)","Nb versements"
+    ]
+    synthese_aff.index += 1
+    st.dataframe(synthese_aff, use_container_width=True, height=400)
+
+    st.download_button(
+        "⬇️ Télécharger toutes les données (CSV)",
+        data=df.to_csv(index=False).encode("utf-8"),
+        file_name="brvm_analyse_dividendes.csv",
+        mime="text/csv"
+    )
+
+
+# ── En-tête ────────────────────────────────────────────────────────────────────
+st.markdown('<div class="main-title">📈 BRVM — Analyses des Titres et Dividendes</div>', unsafe_allow_html=True)
+st.markdown('<div class="subtitle">Bourse Régionale des Valeurs Mobilières — 8 pays UEMOA</div>', unsafe_allow_html=True)
+
+if os.path.exists(CSV_FILE):
+    ts = os.path.getmtime(CSV_FILE)
+    st.caption(f"🔄 Dernière mise à jour : **{datetime.fromtimestamp(ts).strftime('%d/%m/%Y %H:%M')}**")
+
+# ── Sidebar ────────────────────────────────────────────────────────────────────
+with st.sidebar:
+    st.markdown("## 🗂️ Navigation")
+    menu = st.selectbox("", [
+        "🔍 Scraper une page",
+        "🕷️ Scraper toutes les pages",
+        "📋 Données complètes",
+    ], label_visibility="collapsed")
+    st.markdown("---")
+    st.markdown("### ⚙️ Options")
+    avec_prix = st.toggle("💰 Récupérer les prix", value=True)
+    st.markdown("---")
+    st.markdown("**BRVM** — 8 pays UEMOA")
+    st.caption("© 2025 Dashboard BRVM")
 
 df = charger_donnees()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  🏠 ACCUEIL
-# ══════════════════════════════════════════════════════════════════════════════
-if menu == "🏠 Accueil":
-
-    if not df.empty:
-        # KPIs globaux
-        st.markdown("<div class='section-header'>📊 Vue d'ensemble</div>", unsafe_allow_html=True)
-        rend_max = df['Rendement'].max() if 'Rendement' in df.columns else 0
-        rend_moy = df[df['Rendement']>0]['Rendement'].mean() if 'Rendement' in df.columns and df['Rendement'].sum()>0 else 0
-
-        # Leaders
-        leader_div  = df.loc[df['Dividende_net'].idxmax(), 'Emetteur'] if not df.empty else "N/A"
-        leader_rend = df.loc[df['Rendement'].idxmax(), 'Emetteur'] if 'Rendement' in df.columns and rend_max > 0 else "N/A"
-
-        # Ligne 1 : KPIs chiffrés
-        c1, c2, c3, c4, c5, c6 = st.columns(6)
-        c1.metric("📋 Total annonces",     f"{len(df):,}")
-        c2.metric("🏢 Émetteurs",          f"{df['Emetteur'].nunique()}")
-        c3.metric("🏆 Meilleur dividende", f"{df['Dividende_net'].max():,.0f} FCFA")
-        c4.metric("💰 Dividende moyen",    f"{df['Dividende_net'].mean():,.0f} FCFA")
-        c5.metric("💹 Meilleur rendement", f"{rend_max:.2f}%" if rend_max > 0 else "N/A")
-        c6.metric("📊 Rendement moyen",    f"{rend_moy:.2f}%" if rend_moy > 0 else "N/A")
-
-        # Ligne 2 : Leaders
-        st.markdown("&nbsp;", unsafe_allow_html=True)
-        l1, l2, l3, l4 = st.columns(4)
-        l1.metric("🥇 Leader Dividende",  leader_div)
-        l2.metric("🥇 Leader Rendement",  leader_rend)
-        l3.metric("📅 Dernière année",    str(df['Exercice'].max()) if 'Exercice' in df.columns else "N/A")
-        l4.metric("🕒 Dernière MAJ",      df['Date_scraping'].max() if 'Date_scraping' in df.columns else "N/A")
-
-        st.markdown("---")
-
-        # Top 10 Dividendes + Top 10 Rendement
-        col1, col2 = st.columns(2)
-        with col1:
-            st.markdown('<div class="section-header">🏆 Top 10 Dividendes</div>', unsafe_allow_html=True)
-            top10_div = (df.groupby("Emetteur")["Dividende_net"].max()
-                         .sort_values(ascending=False).head(10).reset_index())
-            fig1 = px.bar(top10_div, x="Dividende_net", y="Emetteur", orientation="h",
-                          text="Dividende_net", color="Dividende_net",
-                          color_continuous_scale=["#BDD7EE","#1F4E79"], template="plotly_dark",
-                          labels={"Dividende_net":"Dividende (FCFA)","Emetteur":""})
-            fig1.update_traces(texttemplate="%{text:,.0f}", textposition="outside",
-                               textfont=dict(color="white", size=10))
-            fig1.update_layout(height=380, coloraxis_showscale=False,
-                               yaxis=dict(categoryorder="total ascending"),
-                               plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-                               font=dict(color="white"), margin=dict(l=10,r=60,t=10,b=10))
-            st.plotly_chart(fig1, use_container_width=True)
-
-        with col2:
-            st.markdown('<div class="section-header">💹 Top 10 Rendement</div>', unsafe_allow_html=True)
-            if "Rendement" in df.columns and df["Rendement"].sum() > 0:
-                top10_rend = (df[df["Rendement"]>0].groupby("Emetteur")["Rendement"]
-                              .max().sort_values(ascending=False).head(10).reset_index())
-                fig2 = px.bar(top10_rend, x="Rendement", y="Emetteur", orientation="h",
-                              text="Rendement", color="Rendement",
-                              color_continuous_scale=["#D9F0D3","#1A7A36"], template="plotly_dark",
-                              labels={"Rendement":"Rendement (%)","Emetteur":""})
-                fig2.update_traces(texttemplate="%{text:.2f}%", textposition="outside",
-                                   textfont=dict(color="white", size=10))
-                fig2.update_layout(height=380, coloraxis_showscale=False,
-                                   yaxis=dict(categoryorder="total ascending"),
-                                   plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-                                   font=dict(color="white"), margin=dict(l=10,r=60,t=10,b=10))
-                st.plotly_chart(fig2, use_container_width=True)
-            else:
-                st.info("Lance le scraping avec 'Récupérer les prix' pour voir le rendement.")
-
-        st.markdown("---")
-
-        # Évolution + Dernières annonces
-        col3, col4 = st.columns(2)
-        with col3:
-            st.markdown('<div class="section-header">📈 Évolution par année</div>', unsafe_allow_html=True)
-            if "Exercice" in df.columns:
-                par_annee = df.groupby("Exercice")["Dividende_net"].sum().reset_index()
-                fig3 = px.bar(par_annee, x="Exercice", y="Dividende_net", text="Dividende_net",
-                              color="Dividende_net", color_continuous_scale=["#BDD7EE","#FFD700"],
-                              template="plotly_dark",
-                              labels={"Dividende_net":"Total (FCFA)","Exercice":"Année"})
-                fig3.update_traces(texttemplate="%{text:,.0f}", textposition="outside",
-                                   textfont=dict(color="white", size=9))
-                fig3.update_layout(height=320, coloraxis_showscale=False,
-                                   xaxis=dict(tickmode="linear", dtick=1),
-                                   plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-                                   font=dict(color="white"), margin=dict(t=20,b=10))
-                st.plotly_chart(fig3, use_container_width=True)
-
-        with col4:
-            st.markdown('<div class="section-header">🆕 Dernières annonces</div>', unsafe_allow_html=True)
-            dernieres = df.sort_values("Date_scraping", ascending=False).head(10)[
-                ["Emetteur","Exercice","Dividende_net","Date_paiement"]
-            ].reset_index(drop=True)
-            dernieres.index += 1
-            st.dataframe(dernieres, use_container_width=True, height=320)
-
-    else:
-        st.info("💡 Aucune donnée chargée. Lance d'abord le scraping depuis le menu.")
-        st.markdown("""
-        ### 🚀 Comment démarrer ?
-        1. Va dans **🔍 Scraper une page** pour tester
-        2. Ou **🕷️ Scraper toutes les pages** pour tout collecter
-        3. Explore ensuite **🏆 Top 10 Dividendes** et **💹 Top 10 Rendement**
-        """)
-
-# ══════════════════════════════════════════════════════════════════════════════
 #  🔍 SCRAPER UNE PAGE
 # ══════════════════════════════════════════════════════════════════════════════
-elif menu == "🔍 Scraper une page":
-    st.markdown('<div class="section-header">Scraper une page</div>', unsafe_allow_html=True)
-
-    col1, col2 = st.columns([2, 1])
-    with col1:
-        page = st.slider("Numéro de page", min_value=0, max_value=39, value=0,
-                         help="Le site BRVM a environ 40 pages de dividendes")
-    with col2:
-        st.metric("Page sélectionnée", f"{page + 1} / 40")
-
-    # Initialiser session_state
+if menu == "🔍 Scraper une page":
+    st.markdown('<div class="etape-header">🔍 Scraper une page</div>', unsafe_allow_html=True)
     if "df_scraped" not in st.session_state:
         st.session_state.df_scraped = None
 
-    if st.button("▶️  Lancer le scraping"):
-        with st.spinner(f"⏳ Scraping de la page {page} en cours..."):
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        page = st.slider("Numéro de page", 0, 39, 0)
+    with col2:
+        st.metric("Page", f"{page+1}/40")
+
+    if st.button("▶️ Lancer le scraping"):
+        with st.spinner("Scraping en cours..."):
             try:
-                df_page = scraper_page(page=page, visible=visible, avec_prix=avec_prix)
-                if df_page.empty:
-                    st.warning("⚠️  Aucune donnée trouvée sur cette page.")
-                else:
-                    # Sauvegarder dans session_state et CSV
-                    st.session_state.df_scraped = df_page
-                    df_page.to_csv(CSV_FILE, index=False)
+                df_p = scraper_page(page=page, avec_prix=avec_prix)
+                if not df_p.empty:
+                    # Fusionner avec les données existantes
+                    if not df.empty:
+                        df_merge = pd.concat([df, df_p], ignore_index=True)
+                        df_merge = df_merge.drop_duplicates(subset=["Emetteur","Exercice"], keep="last")
+                    else:
+                        df_merge = df_p
+                    df_merge.to_csv(CSV_FILE, index=False)
                     st.cache_data.clear()
-
-                    # ── KPIs ──────────────────────────────────────────────────
-                    st.markdown("---")
-                    st.markdown('<div class="section-header">📊 Résumé de la page</div>', unsafe_allow_html=True)
-                    k1, k2, k3, k4 = st.columns(4)
-                    k1.metric("📋 Annonces",          f"{len(df_page)}")
-                    k2.metric("🏆 Meilleur dividende", f"{df_page['Dividende_net'].max():,.0f} FCFA")
-                    k3.metric("💰 Dividende moyen",    f"{df_page['Dividende_net'].mean():,.0f} FCFA")
-                    rend = df_page['Rendement'].max() if 'Rendement' in df_page.columns else 0
-                    k4.metric("💹 Meilleur rendement", f"{rend:.2f}%" if rend > 0 else "N/A")
-
-                    # ── Tableau ───────────────────────────────────────────────
-                    st.markdown("---")
-                    st.markdown('<div class="section-header">📋 Données</div>', unsafe_allow_html=True)
-                    st.dataframe(df_page[["Emetteur","Exercice","Dividende_net","Prix_action","Rendement","Date_paiement"]],
-                                 use_container_width=True, height=280)
-
-                    # ── Graphes ───────────────────────────────────────────────
-                    st.markdown("---")
-                    col1, col2 = st.columns(2)
-
-                    with col1:
-                        st.markdown('<div class="section-header">🏆 Dividendes</div>', unsafe_allow_html=True)
-                        fig_div = px.bar(
-                            df_page.sort_values("Dividende_net", ascending=False),
-                            x="Dividende_net", y="Emetteur", orientation="h",
-                            text="Dividende_net", color="Dividende_net",
-                            color_continuous_scale=["#BDD7EE","#1F4E79"],
-                            template="plotly_dark",
-                            labels={"Dividende_net":"Dividende (FCFA)","Emetteur":""}
-                        )
-                        fig_div.update_traces(texttemplate="%{text:,.0f}", textposition="outside",
-                                              textfont=dict(color="white", size=10))
-                        fig_div.update_layout(height=350, coloraxis_showscale=False,
-                                              plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-                                              font=dict(color="white"), margin=dict(l=10,r=60,t=10,b=10))
-                        st.plotly_chart(fig_div, use_container_width=True)
-
-                    with col2:
-                        st.markdown('<div class="section-header">💹 Rendement</div>', unsafe_allow_html=True)
-                        if "Rendement" in df_page.columns and df_page["Rendement"].sum() > 0:
-                            fig_rend = px.bar(
-                                df_page[df_page["Rendement"]>0].sort_values("Rendement", ascending=False),
-                                x="Rendement", y="Emetteur", orientation="h",
-                                text="Rendement", color="Rendement",
-                                color_continuous_scale=["#D9F0D3","#1A7A36"],
-                                template="plotly_dark",
-                                labels={"Rendement":"Rendement (%)","Emetteur":""}
-                            )
-                            fig_rend.update_traces(texttemplate="%{text:.2f}%", textposition="outside",
-                                                   textfont=dict(color="white", size=10))
-                            fig_rend.update_layout(height=350, coloraxis_showscale=False,
-                                                   plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-                                                   font=dict(color="white"), margin=dict(l=10,r=60,t=10,b=10))
-                            st.plotly_chart(fig_rend, use_container_width=True)
-                        else:
-                            st.info("Active 'Récupérer les prix' pour voir le rendement.")
-
-                    # ── Téléchargement ────────────────────────────────────────
-                    st.download_button(
-                        "⬇️  Télécharger en CSV",
-                        data=df_page.to_csv(index=False).encode("utf-8"),
-                        file_name=f"brvm_page_{page}.csv",
-                        mime="text/csv"
-                    )
+                    st.session_state.df_scraped = df_merge
+                    st.success(f"✅ {len(df_p)} lignes récupérées !")
+                else:
+                    st.warning("Aucune donnée trouvée.")
             except Exception as e:
-                st.error(f"❌ Erreur : {e}")
+                st.error(f"❌ {e}")
 
-    # ── Afficher les résultats stockés en session ─────────────────────────────
-    if st.session_state.df_scraped is not None:
-        df_page = st.session_state.df_scraped
-
-        st.success(f"✅ {len(df_page)} lignes récupérées !")
-
-        # KPIs
-        st.markdown("---")
-        st.markdown('<div class="section-header">📊 Résumé</div>', unsafe_allow_html=True)
-        k1, k2, k3, k4 = st.columns(4)
-        k1.metric("📋 Annonces",           f"{len(df_page)}")
-        k2.metric("🏆 Meilleur dividende",  f"{df_page['Dividende_net'].max():,.0f} FCFA")
-        k3.metric("💰 Dividende moyen",     f"{df_page['Dividende_net'].mean():,.0f} FCFA")
-        rend = df_page['Rendement'].max() if 'Rendement' in df_page.columns else 0
-        k4.metric("💹 Meilleur rendement",  f"{rend:.2f}%" if rend > 0 else "N/A")
-
-        # Tableau + Graphes côte à côte
-        st.markdown("---")
-        col1, col2 = st.columns(2)
-
-        with col1:
-            st.markdown('<div class="section-header">📋 Données</div>', unsafe_allow_html=True)
-            st.dataframe(
-                df_page[["Emetteur","Exercice","Dividende_net","Prix_action","Rendement","Date_paiement"]],
-                use_container_width=True, height=350
-            )
-            st.download_button(
-                "⬇️  Télécharger en CSV",
-                data=df_page.to_csv(index=False).encode("utf-8"),
-                file_name=f"brvm_page.csv", mime="text/csv"
-            )
-
-        with col2:
-            st.markdown('<div class="section-header">🏆 Dividendes par émetteur</div>', unsafe_allow_html=True)
-            fig_div = px.bar(
-                df_page.sort_values("Dividende_net", ascending=False),
-                x="Dividende_net", y="Emetteur", orientation="h",
-                text="Dividende_net", color="Dividende_net",
-                color_continuous_scale=["#BDD7EE","#1F4E79"],
-                template="plotly_dark",
-                labels={"Dividende_net":"Dividende (FCFA)","Emetteur":""}
-            )
-            fig_div.update_traces(texttemplate="%{text:,.0f}", textposition="outside",
-                                  textfont=dict(color="white", size=10))
-            fig_div.update_layout(height=350, coloraxis_showscale=False,
-                                  plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-                                  font=dict(color="white"), margin=dict(l=10,r=70,t=10,b=10))
-            st.plotly_chart(fig_div, use_container_width=True)
-
-        # Graphe rendement en dessous si disponible
-        if "Rendement" in df_page.columns and df_page["Rendement"].sum() > 0:
-            st.markdown("---")
-            st.markdown('<div class="section-header">💹 Rendement par émetteur</div>', unsafe_allow_html=True)
-            fig_rend = px.bar(
-                df_page[df_page["Rendement"]>0].sort_values("Rendement", ascending=False),
-                x="Emetteur", y="Rendement",
-                text="Rendement", color="Rendement",
-                color_continuous_scale=["#D9F0D3","#1A7A36"],
-                template="plotly_dark",
-                labels={"Rendement":"Rendement (%)","Emetteur":""}
-            )
-            fig_rend.update_traces(texttemplate="%{text:.2f}%", textposition="outside",
-                                   textfont=dict(color="white", size=10))
-            fig_rend.update_layout(height=320, coloraxis_showscale=False,
-                                   plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-                                   font=dict(color="white"), margin=dict(l=10,r=10,t=10,b=10))
-            st.plotly_chart(fig_rend, use_container_width=True)
+    # Afficher analyses
+    df_affich = st.session_state.get("df_scraped", df)
+    if df_affich is not None and not df_affich.empty:
+        afficher_analyses(df_affich)
+    elif df.empty:
+        st.info("Lance le scraping pour voir les analyses.")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  🕷️ SCRAPER TOUTES LES PAGES
 # ══════════════════════════════════════════════════════════════════════════════
 elif menu == "🕷️ Scraper toutes les pages":
-    st.markdown('<div class="section-header">Scraper toutes les pages</div>', unsafe_allow_html=True)
+    st.markdown('<div class="etape-header">🕷️ Scraper toutes les pages</div>', unsafe_allow_html=True)
 
-    col1, col2 = st.columns([2, 1])
+    col1, col2 = st.columns([3, 1])
     with col1:
-        nb_pages = st.slider("Nombre de pages", min_value=1, max_value=40, value=40)
+        nb_pages = st.slider("Nombre de pages", 1, 40, 40)
     with col2:
         st.metric("Durée estimée", f"~{nb_pages // 8} min")
 
-    st.info("⚡ Scraping rapide — les prix sont chargés en une seule requête.")
-
-    if st.button("▶️  Lancer le scraping complet"):
-        progress_bar = st.progress(0, text="Démarrage...")
-        status_text  = st.empty()
-        frames       = []
-
+    if st.button("▶️ Lancer le scraping complet"):
+        progress = st.progress(0, text="Démarrage...")
+        frames = []
         for p in range(nb_pages):
-            status_text.text(f"⏳ Page {p + 1}/{nb_pages} en cours...")
+            progress.progress((p+1)/nb_pages, text=f"Page {p+1}/{nb_pages}...")
             try:
-                df_p = scraper_page(page=p, visible=visible, avec_prix=avec_prix)
+                df_p = scraper_page(page=p, avec_prix=avec_prix)
                 if not df_p.empty:
                     frames.append(df_p)
-            except Exception as e:
-                st.warning(f"Page {p} ignorée : {e}")
-            progress_bar.progress((p + 1) / nb_pages, text=f"Page {p + 1}/{nb_pages}")
-
+            except Exception:
+                pass
         if frames:
             df_final = pd.concat(frames, ignore_index=True)
-            df_final = df_final.drop_duplicates(subset=["Emetteur", "Exercice"], keep="last")
+            df_final = df_final.drop_duplicates(subset=["Emetteur","Exercice"], keep="last")
             df_final.to_csv(CSV_FILE, index=False)
             st.cache_data.clear()
             st.session_state.df_complet = df_final
-            status_text.success(f"✅ {len(df_final)} lignes collectées sur {nb_pages} pages !")
+            st.success(f"✅ {len(df_final)} lignes collectées !")
         else:
             st.error("❌ Aucune donnée collectée.")
 
-    # ── Afficher les résultats complets ───────────────────────────────────────
-    if "df_complet" in st.session_state and st.session_state.df_complet is not None:
-        df_final = st.session_state.df_complet
-
-        # KPIs
-        st.markdown("---")
-        st.markdown('<div class="section-header">📊 Résumé complet</div>', unsafe_allow_html=True)
-        rend_max = df_final['Rendement'].max() if 'Rendement' in df_final.columns else 0
-        rend_moy = df_final[df_final['Rendement']>0]['Rendement'].mean() if 'Rendement' in df_final.columns and df_final['Rendement'].sum()>0 else 0
-        leader_div  = df_final.loc[df_final['Dividende_net'].idxmax(), 'Emetteur']
-        leader_rend = df_final.loc[df_final['Rendement'].idxmax(), 'Emetteur'] if rend_max > 0 else "N/A"
-
-        k1, k2, k3, k4, k5, k6 = st.columns(6)
-        k1.metric("📋 Total annonces",     f"{len(df_final):,}")
-        k2.metric("🏢 Émetteurs",          f"{df_final['Emetteur'].nunique()}")
-        k3.metric("🏆 Meilleur dividende", f"{df_final['Dividende_net'].max():,.0f} FCFA")
-        k4.metric("💰 Dividende moyen",    f"{df_final['Dividende_net'].mean():,.0f} FCFA")
-        k5.metric("💹 Meilleur rendement", f"{rend_max:.2f}%" if rend_max > 0 else "N/A")
-        k6.metric("📊 Rendement moyen",    f"{rend_moy:.2f}%" if rend_moy > 0 else "N/A")
-
-        st.markdown("---")
-        l1, l2 = st.columns(2)
-        l1.metric("🥇 Leader Dividende", leader_div)
-        l2.metric("🥇 Leader Rendement", leader_rend)
-
-        # Graphes + Tableau
-        st.markdown("---")
-        col1, col2 = st.columns(2)
-
-        with col1:
-            st.markdown('<div class="section-header">🏆 Top 10 Dividendes</div>', unsafe_allow_html=True)
-            top10_div = df_final.groupby("Emetteur")["Dividende_net"].max().sort_values(ascending=False).head(10).reset_index()
-            fig1 = px.bar(top10_div, x="Dividende_net", y="Emetteur", orientation="h",
-                          text="Dividende_net", color="Dividende_net",
-                          color_continuous_scale=["#BDD7EE","#1F4E79"], template="plotly_dark",
-                          labels={"Dividende_net":"Dividende (FCFA)","Emetteur":""})
-            fig1.update_traces(texttemplate="%{text:,.0f}", textposition="outside",
-                               textfont=dict(color="white", size=10))
-            fig1.update_layout(height=380, coloraxis_showscale=False,
-                               yaxis=dict(categoryorder="total ascending"),
-                               plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-                               font=dict(color="white"), margin=dict(l=10,r=70,t=10,b=10))
-            st.plotly_chart(fig1, use_container_width=True)
-
-        with col2:
-            st.markdown('<div class="section-header">💹 Top 10 Rendement</div>', unsafe_allow_html=True)
-            if rend_max > 0:
-                top10_rend = df_final[df_final["Rendement"]>0].groupby("Emetteur")["Rendement"].max().sort_values(ascending=False).head(10).reset_index()
-                fig2 = px.bar(top10_rend, x="Rendement", y="Emetteur", orientation="h",
-                              text="Rendement", color="Rendement",
-                              color_continuous_scale=["#D9F0D3","#1A7A36"], template="plotly_dark",
-                              labels={"Rendement":"Rendement (%)","Emetteur":""})
-                fig2.update_traces(texttemplate="%{text:.2f}%", textposition="outside",
-                                   textfont=dict(color="white", size=10))
-                fig2.update_layout(height=380, coloraxis_showscale=False,
-                                   yaxis=dict(categoryorder="total ascending"),
-                                   plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-                                   font=dict(color="white"), margin=dict(l=10,r=70,t=10,b=10))
-                st.plotly_chart(fig2, use_container_width=True)
-
-        # Évolution par année
-        st.markdown("---")
-        st.markdown('<div class="section-header">📈 Évolution par année</div>', unsafe_allow_html=True)
-        if "Exercice" in df_final.columns:
-            par_annee = df_final.groupby("Exercice")["Dividende_net"].sum().reset_index()
-            fig3 = px.bar(par_annee, x="Exercice", y="Dividende_net", text="Dividende_net",
-                          color="Dividende_net", color_continuous_scale=["#BDD7EE","#FFD700"],
-                          template="plotly_dark",
-                          labels={"Dividende_net":"Total (FCFA)","Exercice":"Année"})
-            fig3.update_traces(texttemplate="%{text:,.0f}", textposition="outside",
-                               textfont=dict(color="white", size=9))
-            fig3.update_layout(height=320, coloraxis_showscale=False,
-                               xaxis=dict(tickmode="linear", dtick=1),
-                               plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-                               font=dict(color="white"), margin=dict(t=20,b=10))
-            st.plotly_chart(fig3, use_container_width=True)
-
-        # Tableau complet
-        st.markdown("---")
-        st.markdown('<div class="section-header">📋 Toutes les données</div>', unsafe_allow_html=True)
-        st.dataframe(df_final, use_container_width=True, height=400)
-        st.download_button(
-            "⬇️  Télécharger en CSV",
-            data=df_final.to_csv(index=False).encode("utf-8"),
-            file_name="brvm_dividendes_complet.csv",
-            mime="text/csv"
-        )
+    # Afficher analyses
+    df_affich = st.session_state.get("df_complet", df)
+    if df_affich is not None and not df_affich.empty:
+        afficher_analyses(df_affich)
+    elif df.empty:
+        st.info("Lance le scraping pour voir les analyses.")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  Charger les données pour les pages suivantes
+#  📋 DONNÉES COMPLÈTES
 # ══════════════════════════════════════════════════════════════════════════════
-else:
+elif menu == "📋 Données complètes":
+    st.markdown('<div class="etape-header">📋 Données complètes</div>', unsafe_allow_html=True)
+
     if df.empty:
-        st.warning("⚠️  Aucune donnée disponible. Lance d'abord le scraping.")
-        st.stop()
-
-    # ══════════════════════════════════════════════════════════════════════════
-    #  🏆 TOP 10 DIVIDENDES
-    # ══════════════════════════════════════════════════════════════════════════
-    if menu == "🏆 Top 10 Dividendes":
-        st.markdown('<div class="section-header">Top 10 — Dividende net maximum</div>', unsafe_allow_html=True)
-
-        top10 = (
-            df.groupby("Emetteur")["Dividende_net"]
-            .max().sort_values(ascending=False).head(10).reset_index()
-        )
-        top10.columns = ["Emetteur", "Dividende max (FCFA)"]
-        top10.index  += 1
-
-        c1, c2, c3 = st.columns(3)
-        c1.metric("🥇 Leader", top10.iloc[0]["Emetteur"])
-        c2.metric("💰 Dividende max", f"{top10.iloc[0]['Dividende max (FCFA)']:,.0f} FCFA")
-        c3.metric("💵 Total dividendes versés", f"{df['Dividende_net'].sum():,.0f} FCFA")
-
-        st.markdown("---")
-        col1, col2 = st.columns([1, 1])
-        with col1:
-            st.markdown("#### 📋 Classement")
-            st.dataframe(top10, use_container_width=True)
-        with col2:
-            st.markdown("#### 📊 Graphique")
-            fig = px.bar(
-                top10, x="Dividende max (FCFA)", y="Emetteur",
-                orientation="h",
-                color="Dividende max (FCFA)",
-                color_continuous_scale=["#BDD7EE", "#1F4E79"],
-                template="plotly_white",
-                text="Dividende max (FCFA)"
-            )
-            fig.update_traces(texttemplate="%{text:,.0f}", textposition="outside")
-            fig.update_layout(yaxis={"categoryorder": "total ascending"},
-                              coloraxis_showscale=False, height=420)
-            st.plotly_chart(fig, use_container_width=True)
-
-        if "Exercice" in df.columns:
-            st.markdown("---")
-            st.markdown("#### 📈 Évolution dans le temps")
-            top10_noms = top10["Emetteur"].tolist()
-            df_evol = (
-                df[df["Emetteur"].isin(top10_noms)]
-                .groupby(["Exercice", "Emetteur"])["Dividende_net"]
-                .max().reset_index()
-            )
-            # Palette de couleurs vives
-            couleurs = [
-                "#1F4E79","#FFD700","#2E75B6","#FF6B35",
-                "#00B4D8","#06D6A0","#EF476F","#FFC43D",
-                "#8338EC","#FB5607"
-            ]
-            fig3 = px.bar(
-                df_evol,
-                x="Exercice", y="Dividende_net",
-                color="Emetteur",
-                barmode="group",
-                text="Dividende_net",
-                color_discrete_sequence=couleurs,
-                template="plotly_dark",
-                labels={"Dividende_net": "Dividende (FCFA)", "Exercice": "Année"},
-            )
-            fig3.update_traces(
-                texttemplate="%{text:,.0f}",
-                textposition="outside",
-                textfont_size=10,
-            )
-            fig3.update_layout(
-                height=450,
-                bargap=0.15,
-                bargroupgap=0.05,
-                xaxis=dict(tickmode="linear", dtick=1, title="Année"),
-                yaxis=dict(title="Dividende net (FCFA)"),
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-                plot_bgcolor="rgba(0,0,0,0)",
-                paper_bgcolor="rgba(0,0,0,0)",
-                font=dict(color="white"),
-            )
-            st.plotly_chart(fig3, use_container_width=True)
-
-
-    # ══════════════════════════════════════════════════════════════════════════
-    #  💹 TOP 10 RENDEMENT
-    # ══════════════════════════════════════════════════════════════════════════
-    elif menu == "💹 Top 10 Rendement":
-        st.markdown('<div class="section-header">Top 10 — Rendement Dividende (%)</div>', unsafe_allow_html=True)
-
-        if "Prix_action" not in df.columns or df["Prix_action"].sum() == 0:
-            st.warning("⚠️  Prix des actions non disponibles. Relance le scraping avec 'Récupérer les prix' activé.")
-            st.stop()
-
-        df["Rendement"] = df.apply(
-            lambda r: round(r["Dividende_net"] / r["Prix_action"] * 100, 2)
-            if r["Prix_action"] > 0 else 0.0, axis=1
-        )
-        top10_r = (
-            df.groupby("Emetteur")["Rendement"]
-            .max().sort_values(ascending=False).head(10).reset_index()
-        )
-        top10_r.columns = ["Emetteur", "Rendement max (%)"]
-        top10_r.index  += 1
-
-        c1, c2, c3 = st.columns(3)
-        c1.metric("🥇 Meilleur rendement", top10_r.iloc[0]["Emetteur"])
-        c2.metric("💹 Rendement max", f"{top10_r.iloc[0]['Rendement max (%)']:.2f}%")
-        c3.metric("📊 Rendement moyen Top10", f"{top10_r['Rendement max (%)'].mean():.2f}%")
-
-        st.markdown("---")
-        col1, col2 = st.columns([1, 1])
-        with col1:
-            st.markdown("#### 📋 Classement")
-            st.dataframe(top10_r, use_container_width=True)
-        with col2:
-            st.markdown("#### 📊 Graphique")
-            fig = px.bar(
-                top10_r, x="Rendement max (%)", y="Emetteur",
-                orientation="h",
-                color="Rendement max (%)",
-                color_continuous_scale=["#D9F0D3", "#1A7A36"],
-                template="plotly_white",
-                text="Rendement max (%)"
-            )
-            fig.update_traces(texttemplate="%{text:.2f}%", textposition="outside")
-            fig.update_layout(yaxis={"categoryorder": "total ascending"},
-                              coloraxis_showscale=False, height=420)
-            st.plotly_chart(fig, use_container_width=True)
-
-        st.markdown("---")
-        st.markdown("#### 🔍 Dividende net vs Rendement")
-
-        df_scatter = df[df["Rendement"] > 0].copy()
-        df_scatter = df_scatter.sort_values("Rendement", ascending=False).head(15)
-
-        couleurs = [
-            "#FFD700","#1F4E79","#FF6B35","#06D6A0","#EF476F",
-            "#00B4D8","#8338EC","#FB5607","#2E75B6","#FFC43D",
-            "#SITAB","#3A86FF","#FF006E","#8AC926","#FFBE0B"
-        ]
-        couleurs = [c for c in couleurs if not c.startswith("#S")]
-
-        fig4 = px.bar(
-            df_scatter,
-            x="Rendement", y="Emetteur",
-            orientation="h",
-            color="Emetteur",
-            text="Rendement",
-            color_discrete_sequence=couleurs,
-            template="plotly_dark",
-            labels={"Rendement": "Rendement (%)", "Emetteur": ""},
-            title="Rendement par action (%)"
-        )
-        fig4.update_traces(
-            texttemplate="%{text:.2f}%",
-            textposition="outside",
-            textfont=dict(size=12, color="white"),
-        )
-        fig4.update_layout(
-            height=500,
-            showlegend=False,
-            yaxis=dict(categoryorder="total ascending"),
-            xaxis=dict(title="Rendement (%)"),
-            plot_bgcolor="rgba(0,0,0,0)",
-            paper_bgcolor="rgba(0,0,0,0)",
-            font=dict(color="white", size=12),
-            title_font=dict(size=16, color="#FFD700"),
-            margin=dict(l=10, r=80, t=50, b=10),
-        )
-        st.plotly_chart(fig4, use_container_width=True)
-
-
-    # ══════════════════════════════════════════════════════════════════════════
-    #  📋 DONNÉES COMPLÈTES
-    # ══════════════════════════════════════════════════════════════════════════
-    elif menu == "📋 Données complètes":
-        st.markdown('<div class="section-header">Toutes les données</div>', unsafe_allow_html=True)
-
+        st.warning("Aucune donnée. Lance d'abord le scraping.")
+    else:
         col1, col2, col3 = st.columns(3)
         with col1:
             emetteurs = ["Tous"] + sorted(df["Emetteur"].dropna().unique().tolist())
@@ -771,95 +463,41 @@ else:
         df_filtre = df.copy()
         if filtre_emetteur != "Tous":
             df_filtre = df_filtre[df_filtre["Emetteur"] == filtre_emetteur]
-        if filtre_annee != "Toutes" and "Exercice" in df.columns:
+        if filtre_annee != "Toutes":
             df_filtre = df_filtre[df_filtre["Exercice"] == filtre_annee]
         df_filtre = df_filtre[df_filtre["Dividende_net"] >= min_div]
 
         st.metric("Résultats", f"{len(df_filtre):,} lignes")
-        st.dataframe(df_filtre, use_container_width=True, height=300)
+        st.dataframe(df_filtre, use_container_width=True, height=350)
+
+        if filtre_emetteur != "Tous" and len(df_filtre) > 0 and "Exercice" in df_filtre.columns:
+            st.markdown("---")
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown(f'<div class="section-header">📈 Historique — {filtre_emetteur}</div>', unsafe_allow_html=True)
+                fig = px.bar(
+                    df_filtre.sort_values("Exercice"), x="Exercice", y="Dividende_net",
+                    text="Dividende_net", color="Dividende_net",
+                    color_continuous_scale=["#BDD7EE","#1F4E79"], template="plotly_dark",
+                    labels={"Dividende_net":"Dividende (FCFA)","Exercice":"Année"}
+                )
+                fig.update_traces(texttemplate="%{text:,.2f}", textposition="outside",
+                                  textfont=dict(color="white"))
+                fig.update_layout(height=350, coloraxis_showscale=False,
+                                  xaxis=dict(tickmode="linear", dtick=1),
+                                  plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                                  font=dict(color="white"))
+                st.plotly_chart(fig, use_container_width=True)
+            with col2:
+                st.markdown('<div class="section-header">📊 Résumé</div>', unsafe_allow_html=True)
+                st.metric("💰 Total versé", f"{df_filtre['Dividende_net'].sum():,.0f} FCFA")
+                st.metric("📈 Dividende moyen", f"{df_filtre['Dividende_net'].mean():,.0f} FCFA")
+                if len(df_filtre) > 0:
+                    best_idx = df_filtre['Dividende_net'].idxmax()
+                    st.metric("🏆 Meilleure année", str(df_filtre.loc[best_idx, 'Exercice']))
 
         st.download_button(
-            "⬇️  Télécharger les données filtrées (CSV)",
+            "⬇️ Télécharger",
             data=df_filtre.to_csv(index=False).encode("utf-8"),
-            file_name="brvm_filtré.csv",
-            mime="text/csv"
+            file_name="brvm_filtré.csv", mime="text/csv"
         )
-
-        # ── Graphe historique si un émetteur est sélectionné ──────────────────
-        if filtre_emetteur != "Tous" and "Exercice" in df_filtre.columns and len(df_filtre) > 0:
-            st.markdown("---")
-            st.markdown(f"#### 📈 Historique des dividendes — {filtre_emetteur}")
-
-            df_hist = df_filtre.sort_values("Exercice")
-
-            col1, col2 = st.columns(2)
-
-            with col1:
-                # Graphe dividende par exercice
-                fig_hist = px.bar(
-                    df_hist,
-                    x="Exercice", y="Dividende_net",
-                    text="Dividende_net",
-                    color="Dividende_net",
-                    color_continuous_scale=["#BDD7EE", "#1F4E79"],
-                    template="plotly_dark",
-                    labels={"Dividende_net": "Dividende net (FCFA)", "Exercice": "Année"},
-                    title=f"Dividende net par année"
-                )
-                fig_hist.update_traces(
-                    texttemplate="%{text:,.2f} FCFA",
-                    textposition="outside",
-                    textfont=dict(size=11, color="white"),
-                )
-                fig_hist.update_layout(
-                    height=380,
-                    coloraxis_showscale=False,
-                    xaxis=dict(tickmode="linear", dtick=1),
-                    plot_bgcolor="rgba(0,0,0,0)",
-                    paper_bgcolor="rgba(0,0,0,0)",
-                    font=dict(color="white"),
-                    title_font=dict(size=14, color="#FFD700"),
-                    margin=dict(t=50, b=10),
-                )
-                st.plotly_chart(fig_hist, use_container_width=True)
-
-            with col2:
-                # Graphe rendement par exercice (si disponible)
-                if "Rendement" in df_hist.columns and df_hist["Rendement"].sum() > 0:
-                    fig_rend = px.bar(
-                        df_hist,
-                        x="Exercice", y="Rendement",
-                        text="Rendement",
-                        color="Rendement",
-                        color_continuous_scale=["#D9F0D3", "#1A7A36"],
-                        template="plotly_dark",
-                        labels={"Rendement": "Rendement (%)", "Exercice": "Année"},
-                        title="Rendement dividende par année (%)"
-                    )
-                    fig_rend.update_traces(
-                        texttemplate="%{text:.2f}%",
-                        textposition="outside",
-                        textfont=dict(size=11, color="white"),
-                    )
-                    fig_rend.update_layout(
-                        height=380,
-                        coloraxis_showscale=False,
-                        xaxis=dict(tickmode="linear", dtick=1),
-                        plot_bgcolor="rgba(0,0,0,0)",
-                        paper_bgcolor="rgba(0,0,0,0)",
-                        font=dict(color="white"),
-                        title_font=dict(size=14, color="#FFD700"),
-                        margin=dict(t=50, b=10),
-                    )
-                    st.plotly_chart(fig_rend, use_container_width=True)
-                else:
-                    # Métriques résumées
-                    st.markdown("#### 📊 Résumé")
-                    st.metric("💰 Dividende total versé",
-                              f"{df_hist['Dividende_net'].sum():,.2f} FCFA")
-                    st.metric("📈 Dividende moyen",
-                              f"{df_hist['Dividende_net'].mean():,.2f} FCFA")
-                    st.metric("🏆 Meilleure année",
-                              str(df_hist.loc[df_hist['Dividende_net'].idxmax(), 'Exercice']))
-                    st.metric("📉 Moins bonne année",
-                              str(df_hist.loc[df_hist['Dividende_net'].idxmin(), 'Exercice']))
