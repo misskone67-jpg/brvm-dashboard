@@ -1,0 +1,13 @@
+# Données locales
+dividendes.csv
+brvm_scheduler.log
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+
+# Secrets
+.streamlit/secrets.toml
