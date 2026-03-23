@@ -10,10 +10,8 @@ Lancement : streamlit run app.py
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import threading
 import os
 from datetime import datetime
-from scraper import scraper_page, scraper_toutes_pages
 
 # ── Configuration ──────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -58,35 +56,8 @@ st.markdown("""
         background: linear-gradient(180deg, #1F4E79 0%, #2E75B6 100%);
     }
     section[data-testid="stSidebar"] * { color: white !important; }
-    div.stButton > button {
-        background: linear-gradient(90deg, #1F4E79, #2E75B6);
-        color: white; border: none; border-radius: 8px;
-        padding: 10px 24px; font-weight: 600; width: 100%;
-        transition: all 0.3s ease;
-    }
-    div.stButton > button:hover {
-        background: linear-gradient(90deg, #FFD700, #FFA500);
-        color: #1F4E79; transform: translateY(-2px);
-    }
 </style>
 """, unsafe_allow_html=True)
-
-# ── Scheduler ──────────────────────────────────────────────────────────────────
-try:
-    from scheduler import verifier_nouvelles_annonces
-    import schedule, time
-
-    def lancer_scheduler():
-        schedule.every(1).hours.do(verifier_nouvelles_annonces)
-        while True:
-            schedule.run_pending()
-            time.sleep(60)
-
-    if "scheduler_started" not in st.session_state:
-        st.session_state.scheduler_started = True
-        threading.Thread(target=lancer_scheduler, daemon=True).start()
-except Exception:
-    pass
 
 # ── Chargement données ─────────────────────────────────────────────────────────
 @st.cache_data(ttl=300)
@@ -107,13 +78,11 @@ def charger_donnees():
 
 # ── Fonction principale d'affichage des 2 étapes ──────────────────────────────
 def afficher_analyses(df):
-    """Affiche l'Étape 1 et l'Étape 2 à partir d'un DataFrame."""
-
     if df.empty:
         st.info("💡 Aucune donnée disponible.")
         return
 
-    # ── Filtre années ──────────────────────────────────────────────────────────
+    # Filtre années
     if "Exercice" in df.columns:
         annees_dispo = ["Toutes"] + sorted([int(x) for x in df["Exercice"].dropna().unique().tolist()], reverse=True)
         col_f1, col_f2 = st.columns([1, 3])
@@ -125,47 +94,34 @@ def afficher_analyses(df):
     st.markdown("---")
 
     # ══════════════════════════════════════════════════════════════════════════
-    #  ÉTAPE 1 — Top 10 titres ayant payé le maximum de dividende
+    #  ÉTAPE 1
     # ══════════════════════════════════════════════════════════════════════════
-    st.markdown('<div class="etape-header">📊 Étape 1 — Top 10 Titres : Maximum de Dividende</div>', unsafe_allow_html=True)
+    st.markdown('<div class="etape-header">📊 Étape 1 — Les 10 Titres ayant payé le Maximum de Dividende</div>', unsafe_allow_html=True)
 
-    # Calculs Étape 1
     top10 = (
         df.groupby("Emetteur")["Dividende_net"]
         .sum().sort_values(ascending=False).head(10).reset_index()
     )
     top10.columns = ["Emetteur", "Dividende cumulé (FCFA)"]
 
-    best_div_nom    = top10.iloc[0]["Emetteur"] if not top10.empty else "N/A"
-    best_div_val    = top10.iloc[0]["Dividende cumulé (FCFA)"] if not top10.empty else 0
-    moy_div_val     = df["Dividende_net"].mean()
-    moy_div_nom     = df.groupby("Emetteur")["Dividende_net"].mean().idxmax()
+    best_div_nom = top10.iloc[0]["Emetteur"] if not top10.empty else "N/A"
+    best_div_val = top10.iloc[0]["Dividende cumulé (FCFA)"] if not top10.empty else 0
+    rend_max_val = df["Rendement"].max() if "Rendement" in df.columns else 0
+    rend_max_nom = df.loc[df["Rendement"].idxmax(), "Emetteur"] if rend_max_val > 0 else "N/A"
 
-    rend_max_val    = df["Rendement"].max() if "Rendement" in df.columns else 0
-    rend_max_nom    = df.loc[df["Rendement"].idxmax(), "Emetteur"] if rend_max_val > 0 else "N/A"
-    rend_moy_val    = df[df["Rendement"]>0]["Rendement"].mean() if rend_max_val > 0 else 0
-    rend_moy_nom    = df[df["Rendement"]>0].groupby("Emetteur")["Rendement"].mean().idxmax() if rend_max_val > 0 else "N/A"
-
-    # KPIs Étape 1 — 4 KPIs
     k1, k2, k3, k4 = st.columns(4)
     k1.metric("📋 Total annonces",     f"{len(df):,}")
     k2.metric("🏢 Émetteurs",          f"{df['Emetteur'].nunique()}")
-    k3.metric("🏆 Meilleur dividende", f"{best_div_val:,.0f} FCFA",
-              delta=best_div_nom)
-    k4.metric("💹 Meilleur rendement", f"{rend_max_val:.2f}%",
-              delta=rend_max_nom if rend_max_val > 0 else "N/A")
+    k3.metric("🏆 Meilleur dividende", f"{best_div_val:,.0f} FCFA", delta=best_div_nom)
+    k4.metric("💹 Meilleur rendement", f"{rend_max_val:.2f}%", delta=rend_max_nom if rend_max_val > 0 else "N/A")
 
     st.markdown("---")
 
-    # Graphes Étape 1
     col1, col2 = st.columns(2)
-
     with col1:
         st.markdown('<div class="section-header">🏆 Top 10 — Dividende cumulé</div>', unsafe_allow_html=True)
-        top10_plot = top10.copy()
-        top10_plot.index += 1
         fig1 = px.bar(
-            top10_plot, x="Dividende cumulé (FCFA)", y="Emetteur",
+            top10, x="Dividende cumulé (FCFA)", y="Emetteur",
             orientation="h", text="Dividende cumulé (FCFA)",
             color="Dividende cumulé (FCFA)",
             color_continuous_scale=["#BDD7EE","#1F4E79"],
@@ -203,23 +159,22 @@ def afficher_analyses(df):
                                font=dict(color="white"), margin=dict(l=10,r=80,t=10,b=10))
             st.plotly_chart(fig2, use_container_width=True)
         else:
-            st.info("Active 'Récupérer les prix' pour voir le rendement.")
+            st.info("Aucune donnée de rendement disponible.")
 
-    # Tableau Top 10
     st.markdown('<div class="section-header">📋 Classement Top 10 Dividendes</div>', unsafe_allow_html=True)
     top10_display = top10.copy()
     top10_display.index += 1
     st.dataframe(top10_display, use_container_width=True, height=380)
 
     # ══════════════════════════════════════════════════════════════════════════
-    #  ÉTAPE 2 — Étude du coût des actions qui paient des dividendes
+    #  ÉTAPE 2
     # ══════════════════════════════════════════════════════════════════════════
-    st.markdown('<div class="etape-header">💵 Étape 2 — Étude du Coût des Actions à Dividende</div>', unsafe_allow_html=True)
+    st.markdown('<div class="etape-header">💵 Étape 2 — Étude du Coût des Actions qui paient des Dividendes</div>', unsafe_allow_html=True)
 
     df_prix = df[df["Prix_action"] > 0].copy() if "Prix_action" in df.columns else pd.DataFrame()
 
     if df_prix.empty:
-        st.warning("⚠️ Lance le scraping avec 'Récupérer les prix' activé pour voir cette section.")
+        st.warning("⚠️ Aucune donnée de prix disponible.")
         return
 
     synthese = (
@@ -242,22 +197,16 @@ def afficher_analyses(df):
     moins_chere_nom = synthese.iloc[-1]["Emetteur"]
     moins_chere_val = synthese.iloc[-1]["Prix_action"]
     prix_moyen_val  = synthese["Prix_action"].mean()
-    leader_rend_nom = synthese.loc[synthese["Rendement_max"].idxmax(), "Emetteur"]
-    leader_rend_val = synthese["Rendement_max"].max()
 
-    # KPIs Étape 2 — 4 KPIs
     k1, k2, k3, k4 = st.columns(4)
     k1.metric("📊 Nb actions analysées",  f"{len(synthese)}")
-    k2.metric("💎 Action la plus chère",  f"{plus_chere_val:,.0f} FCFA",
-              delta=plus_chere_nom)
-    k3.metric("💡 Action la moins chère", f"{moins_chere_val:,.0f} FCFA",
-              delta=moins_chere_nom)
+    k2.metric("💎 Action la plus chère",  f"{plus_chere_val:,.0f} FCFA", delta=plus_chere_nom)
+    k3.metric("💡 Action la moins chère", f"{moins_chere_val:,.0f} FCFA", delta=moins_chere_nom)
     k4.metric("💰 Prix moyen par action", f"{prix_moyen_val:,.0f} FCFA")
 
     st.markdown("---")
 
     col3, col4 = st.columns(2)
-
     with col3:
         st.markdown('<div class="section-header">💎 Prix des actions (FCFA)</div>', unsafe_allow_html=True)
         fig3 = px.bar(
@@ -281,37 +230,28 @@ def afficher_analyses(df):
 
     with col4:
         st.markdown('<div class="section-header">📊 Prix action vs Dividende versé</div>', unsafe_allow_html=True)
-        # Graphe barres groupées Prix vs Dividende — plus lisible
         top15 = synthese.sort_values("Prix_action", ascending=False).head(15)
         fig4 = px.bar(
             top15.melt(id_vars="Emetteur",
                        value_vars=["Prix_action", "Dividende_moyen"],
                        var_name="Indicateur", value_name="Valeur (FCFA)"),
             x="Emetteur", y="Valeur (FCFA)",
-            color="Indicateur",
-            barmode="group",
+            color="Indicateur", barmode="group",
             text="Valeur (FCFA)",
-            color_discrete_map={
-                "Prix_action"    : "#2E75B6",
-                "Dividende_moyen": "#FFD700"
-            },
+            color_discrete_map={"Prix_action":"#2E75B6","Dividende_moyen":"#FFD700"},
             template="plotly_dark",
             labels={"Emetteur":"", "Valeur (FCFA)":"Valeur (FCFA)"},
             title="Prix de l'action vs Dividende moyen versé"
         )
         fig4.update_traces(texttemplate="%{text:,.0f}", textposition="outside",
                            textfont=dict(size=9, color="white"))
-        fig4.update_layout(
-            height=500,
-            xaxis=dict(tickangle=-35),
-            plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-            font=dict(color="white"), title_font=dict(color="#FFD700"),
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-            margin=dict(t=60, b=80)
-        )
+        fig4.update_layout(height=500, xaxis=dict(tickangle=-35),
+                           plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                           font=dict(color="white"), title_font=dict(color="#FFD700"),
+                           legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                           margin=dict(t=60, b=80))
         st.plotly_chart(fig4, use_container_width=True)
 
-    # Tableau comparatif Étape 2
     st.markdown('<div class="section-header">📋 Tableau comparatif — Prix | Dividende | Rendement</div>', unsafe_allow_html=True)
     synthese_aff = synthese.copy().round(2)
     synthese_aff.columns = [
@@ -322,7 +262,7 @@ def afficher_analyses(df):
     st.dataframe(synthese_aff, use_container_width=True, height=400)
 
     st.download_button(
-        "⬇️ Télécharger toutes les données (CSV)",
+        "⬇️ Télécharger les données (CSV)",
         data=df.to_csv(index=False).encode("utf-8"),
         file_name="brvm_analyse_dividendes.csv",
         mime="text/csv"
@@ -341,102 +281,24 @@ if os.path.exists(CSV_FILE):
 with st.sidebar:
     st.markdown("## 🗂️ Navigation")
     menu = st.selectbox("", [
-        "🔍 Scraper une page",
-        "🕷️ Scraper toutes les pages",
+        "📊 Analyse",
         "📋 Données complètes",
     ], label_visibility="collapsed")
-    st.markdown("---")
-    st.markdown("### ⚙️ Options")
-    avec_prix = st.toggle("💰 Récupérer les prix", value=True)
     st.markdown("---")
     st.markdown("**BRVM** — 8 pays UEMOA")
     st.caption("© 2025 Dashboard BRVM")
 
 df = charger_donnees()
 
+if df.empty:
+    st.warning("⚠️ Aucune donnée disponible. Placez le fichier `dividendes.csv` dans le dossier BRVM.")
+    st.stop()
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  🔍 SCRAPER UNE PAGE
+#  📊 ANALYSE
 # ══════════════════════════════════════════════════════════════════════════════
-if menu == "🔍 Scraper une page":
-    st.markdown('<div class="etape-header">🔍 Scraper une page</div>', unsafe_allow_html=True)
-    if "df_scraped" not in st.session_state:
-        st.session_state.df_scraped = None
-
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        page = st.slider("Numéro de page", 0, 39, 0)
-    with col2:
-        st.metric("Page", f"{page+1}/40")
-
-    if st.button("▶️ Lancer le scraping"):
-        with st.spinner("Scraping en cours..."):
-            try:
-                df_p = scraper_page(page=page, avec_prix=avec_prix)
-                if not df_p.empty:
-                    # Fusionner avec les données existantes
-                    if not df.empty:
-                        df_merge = pd.concat([df, df_p], ignore_index=True)
-                        df_merge = df_merge.drop_duplicates(subset=["Emetteur","Exercice"], keep="last")
-                    else:
-                        df_merge = df_p
-                    df_merge.to_csv(CSV_FILE, index=False)
-                    st.cache_data.clear()
-                    st.session_state.df_scraped = df_merge
-                    st.success(f"✅ {len(df_p)} lignes récupérées !")
-                else:
-                    st.warning("Aucune donnée trouvée.")
-            except Exception as e:
-                st.error(f"❌ {e}")
-
-    # Afficher analyses
-    df_affich = st.session_state.get("df_scraped", df)
-    if df_affich is not None and not df_affich.empty:
-        afficher_analyses(df_affich)
-    elif df.empty:
-        st.info("Lance le scraping pour voir les analyses.")
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  🕷️ SCRAPER TOUTES LES PAGES
-# ══════════════════════════════════════════════════════════════════════════════
-elif menu == "🕷️ Scraper toutes les pages":
-    st.markdown('<div class="etape-header">🕷️ Scraper toutes les pages</div>', unsafe_allow_html=True)
-
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        nb_pages = st.slider("Nombre de pages", 1, 40, 40)
-    with col2:
-        st.metric("Durée estimée", f"~{nb_pages // 8} min")
-
-    if st.button("▶️ Lancer le scraping complet"):
-        progress = st.progress(0, text="Démarrage...")
-        frames = []
-        for p in range(nb_pages):
-            progress.progress((p+1)/nb_pages, text=f"Page {p+1}/{nb_pages}...")
-            try:
-                df_p = scraper_page(page=p, avec_prix=avec_prix)
-                if not df_p.empty:
-                    frames.append(df_p)
-            except Exception:
-                pass
-        if frames:
-            df_final = pd.concat(frames, ignore_index=True)
-            df_final = df_final.drop_duplicates(subset=["Emetteur","Exercice"], keep="last")
-            df_final.to_csv(CSV_FILE, index=False)
-            st.cache_data.clear()
-            st.session_state.df_complet = df_final
-            st.success(f"✅ {len(df_final)} lignes collectées !")
-        else:
-            st.error("❌ Aucune donnée collectée.")
-
-    # Afficher analyses
-    df_affich = st.session_state.get("df_complet", df)
-    if df_affich is not None and not df_affich.empty:
-        afficher_analyses(df_affich)
-    elif df.empty:
-        st.info("Lance le scraping pour voir les analyses.")
-
+if menu == "📊 Analyse":
+    afficher_analyses(df)
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  📋 DONNÉES COMPLÈTES
@@ -444,60 +306,57 @@ elif menu == "🕷️ Scraper toutes les pages":
 elif menu == "📋 Données complètes":
     st.markdown('<div class="etape-header">📋 Données complètes</div>', unsafe_allow_html=True)
 
-    if df.empty:
-        st.warning("Aucune donnée. Lance d'abord le scraping.")
-    else:
-        col1, col2, col3 = st.columns(3)
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        emetteurs = ["Tous"] + sorted(df["Emetteur"].dropna().unique().tolist())
+        filtre_emetteur = st.selectbox("Filtrer par émetteur", emetteurs)
+    with col2:
+        if "Exercice" in df.columns:
+            annees = ["Toutes"] + sorted(df["Exercice"].dropna().unique().tolist(), reverse=True)
+            filtre_annee = st.selectbox("Filtrer par exercice", annees)
+        else:
+            filtre_annee = "Toutes"
+    with col3:
+        min_div = st.number_input("Dividende min (FCFA)", min_value=0, value=0, step=100)
+
+    df_filtre = df.copy()
+    if filtre_emetteur != "Tous":
+        df_filtre = df_filtre[df_filtre["Emetteur"] == filtre_emetteur]
+    if filtre_annee != "Toutes":
+        df_filtre = df_filtre[df_filtre["Exercice"] == filtre_annee]
+    df_filtre = df_filtre[df_filtre["Dividende_net"] >= min_div]
+
+    st.metric("Résultats", f"{len(df_filtre):,} lignes")
+    st.dataframe(df_filtre, use_container_width=True, height=350)
+
+    if filtre_emetteur != "Tous" and len(df_filtre) > 0 and "Exercice" in df_filtre.columns:
+        st.markdown("---")
+        col1, col2 = st.columns(2)
         with col1:
-            emetteurs = ["Tous"] + sorted(df["Emetteur"].dropna().unique().tolist())
-            filtre_emetteur = st.selectbox("Filtrer par émetteur", emetteurs)
+            st.markdown(f'<div class="section-header">📈 Historique — {filtre_emetteur}</div>', unsafe_allow_html=True)
+            fig = px.bar(
+                df_filtre.sort_values("Exercice"), x="Exercice", y="Dividende_net",
+                text="Dividende_net", color="Dividende_net",
+                color_continuous_scale=["#BDD7EE","#1F4E79"], template="plotly_dark",
+                labels={"Dividende_net":"Dividende (FCFA)","Exercice":"Année"}
+            )
+            fig.update_traces(texttemplate="%{text:,.2f}", textposition="outside",
+                              textfont=dict(color="white"))
+            fig.update_layout(height=350, coloraxis_showscale=False,
+                              xaxis=dict(tickmode="linear", dtick=1),
+                              plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                              font=dict(color="white"))
+            st.plotly_chart(fig, use_container_width=True)
         with col2:
-            if "Exercice" in df.columns:
-                annees = ["Toutes"] + sorted(df["Exercice"].dropna().unique().tolist(), reverse=True)
-                filtre_annee = st.selectbox("Filtrer par exercice", annees)
-            else:
-                filtre_annee = "Toutes"
-        with col3:
-            min_div = st.number_input("Dividende min (FCFA)", min_value=0, value=0, step=100)
+            st.markdown('<div class="section-header">📊 Résumé</div>', unsafe_allow_html=True)
+            st.metric("💰 Total versé", f"{df_filtre['Dividende_net'].sum():,.0f} FCFA")
+            st.metric("📈 Dividende moyen", f"{df_filtre['Dividende_net'].mean():,.0f} FCFA")
+            if len(df_filtre) > 0:
+                best_idx = df_filtre['Dividende_net'].idxmax()
+                st.metric("🏆 Meilleure année", str(df_filtre.loc[best_idx, 'Exercice']))
 
-        df_filtre = df.copy()
-        if filtre_emetteur != "Tous":
-            df_filtre = df_filtre[df_filtre["Emetteur"] == filtre_emetteur]
-        if filtre_annee != "Toutes":
-            df_filtre = df_filtre[df_filtre["Exercice"] == filtre_annee]
-        df_filtre = df_filtre[df_filtre["Dividende_net"] >= min_div]
-
-        st.metric("Résultats", f"{len(df_filtre):,} lignes")
-        st.dataframe(df_filtre, use_container_width=True, height=350)
-
-        if filtre_emetteur != "Tous" and len(df_filtre) > 0 and "Exercice" in df_filtre.columns:
-            st.markdown("---")
-            col1, col2 = st.columns(2)
-            with col1:
-                st.markdown(f'<div class="section-header">📈 Historique — {filtre_emetteur}</div>', unsafe_allow_html=True)
-                fig = px.bar(
-                    df_filtre.sort_values("Exercice"), x="Exercice", y="Dividende_net",
-                    text="Dividende_net", color="Dividende_net",
-                    color_continuous_scale=["#BDD7EE","#1F4E79"], template="plotly_dark",
-                    labels={"Dividende_net":"Dividende (FCFA)","Exercice":"Année"}
-                )
-                fig.update_traces(texttemplate="%{text:,.2f}", textposition="outside",
-                                  textfont=dict(color="white"))
-                fig.update_layout(height=350, coloraxis_showscale=False,
-                                  xaxis=dict(tickmode="linear", dtick=1),
-                                  plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-                                  font=dict(color="white"))
-                st.plotly_chart(fig, use_container_width=True)
-            with col2:
-                st.markdown('<div class="section-header">📊 Résumé</div>', unsafe_allow_html=True)
-                st.metric("💰 Total versé", f"{df_filtre['Dividende_net'].sum():,.0f} FCFA")
-                st.metric("📈 Dividende moyen", f"{df_filtre['Dividende_net'].mean():,.0f} FCFA")
-                if len(df_filtre) > 0:
-                    best_idx = df_filtre['Dividende_net'].idxmax()
-                    st.metric("🏆 Meilleure année", str(df_filtre.loc[best_idx, 'Exercice']))
-
-        st.download_button(
-            "⬇️ Télécharger",
-            data=df_filtre.to_csv(index=False).encode("utf-8"),
-            file_name="brvm_filtré.csv", mime="text/csv"
-        )
+    st.download_button(
+        "⬇️ Télécharger",
+        data=df_filtre.to_csv(index=False).encode("utf-8"),
+        file_name="brvm_filtré.csv", mime="text/csv"
+    )
