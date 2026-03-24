@@ -286,6 +286,10 @@ with st.sidebar:
     ], label_visibility="collapsed")
     st.markdown("---")
     st.markdown("**BRVM** — 8 pays UEMOA")
+    st.markdown("---")
+    st.markdown("### 👥 Auteurs")
+    st.markdown("**KONE TCHITCHEMEGO**")
+    st.markdown("**MELIANE SEFORA LASME**")
     st.caption("© 2025 Dashboard BRVM")
 
 df = charger_donnees()
